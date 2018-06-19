@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+'semi-supervised learning: a simple GCN implementation in karate club data set'
+
+
+__author__ = 'Zhangyijing'
+
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+lr = 1e-2  # learning rate
+epochs = 300  # training epochs
+nodes_num = 34  # 34 members in the karate club
+class_num = 4  # 4 classes
+hidden_dim = [4, 4, 2, class_num]  # the third digit is the location dimension, the last is the class number
+selected_labels_indices = [19, 16, 9, 23]  # only four nodes are selected and each class possesses a node with known labels
+
+# get the normalization adjacent matrix
+class data_processing(object):
+    def __init__(self, nodes_number):
+        self.__nodes_number = nodes_number
+
+    def get_adjMatrix(self):
+        data = np.int32(np.loadtxt('./karate_edges_77.txt'))
+        adjMatrix = np.zeros((self.__nodes_number, self.__nodes_number), dtype=np.float32)
+        for index in np.arange(len(data)):
+            adjMatrix[data[index, 0]-1, data[index, 1]-1] = 1
+        adjMatrix += np.eye(self.__nodes_number)
+        degreeMatrix_sqrt = np.diag(np.power(np.sum(adjMatrix, axis=0), -1/2))
+        adjMatrix_norm = np.dot(np.dot(degreeMatrix_sqrt, adjMatrix), degreeMatrix_sqrt)
+        return adjMatrix_norm
+
+
+def build_graph(adjMatrix_norm):
+    x = tf.placeholder(tf.float32, [nodes_num, None])
+    y = tf.placeholder(tf.float32, [class_num, class_num])
+
+    # initialize weights and biases
+    W1 = tf.Variable(tf.truncated_normal([nodes_num, hidden_dim[0]], stddev=0.01), dtype=tf.float32)
+    bias1 = tf.Variable(tf.truncated_normal([nodes_num, hidden_dim[0]], stddev=0.01), dtype=tf.float32)
+    W2 = tf.Variable(tf.truncated_normal([hidden_dim[0], hidden_dim[1]], stddev=0.01), dtype=tf.float32)
+    bias2 = tf.Variable(tf.truncated_normal([nodes_num, hidden_dim[1]], stddev=0.01), dtype=tf.float32)
+    W3 = tf.Variable(tf.truncated_normal([hidden_dim[1], hidden_dim[2]], stddev=0.01), dtype=tf.float32)
+    bias3 = tf.Variable(tf.truncated_normal([nodes_num, hidden_dim[2]], stddev=0.01), dtype=tf.float32)
+    W4 = tf.Variable(tf.truncated_normal([hidden_dim[2], hidden_dim[3]], stddev=0.01), dtype=tf.float32)
+    bias4 = tf.Variable(tf.truncated_normal([nodes_num, hidden_dim[3]], stddev=0.01), dtype=tf.float32)
+
+    # calculate the outputs of each layer
+    o1 = tf.nn.tanh(tf.add(tf.matmul(tf.matmul(adjMatrix_norm, x), W1), bias1))
+    o2 = tf.nn.tanh(tf.add(tf.matmul(tf.matmul(adjMatrix_norm, o1), W2), bias2))
+    o3 = tf.nn.tanh(tf.add(tf.matmul(tf.matmul(adjMatrix_norm, o2), W3), bias3))
+    logits = tf.add(tf.matmul(tf.matmul(adjMatrix_norm, o3), W4), bias4)
+
+    # the prediction
+    y_predict = tf.nn.softmax(logits)
+
+    # calculate the cross entropy
+    loss_op = tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits_v2(logits=tf.gather(logits, selected_labels_indices), labels=y))
+    train_op = tf.train.AdamOptimizer(lr).minimize(loss_op)
+
+    pred_labels = tf.argmax(y_predict, axis=1)
+
+    return {'o3': o3,
+            'train_op': train_op,
+            'loss_op': loss_op,
+            'y_predict': y_predict,
+            'x': x,
+            'y': y,
+            'pred_labels': pred_labels
+        }
+
+
+# plot the figure
+def plot_figure(location, labels):
+    data = np.int32(np.loadtxt('./karate_edges_77.txt'))
+    idx0 = np.where(labels == 0)[0]
+    idx1 = np.where(labels == 1)[0]
+    idx2 = np.where(labels == 2)[0]
+    idx3 = np.where(labels == 3)[0]
+
+    # plot the scatter of different labels
+    plt.scatter(location[idx0, 0], location[idx0, 1], marker='o', color='b', label='0', s=20)
+    plt.scatter(location[idx1, 0], location[idx1, 1], marker='o', color='g', label='1', s=20)
+    plt.scatter(location[idx2, 0], location[idx2, 1], marker='o', color='k', label='2', s=20)
+    plt.scatter(location[idx3, 0], location[idx3, 1], marker='o', color='m', label='3', s=20)
+
+    # the selected nodes are denoted by '*'
+    plt.scatter(location[selected_labels_indices[0], 0], location[selected_labels_indices[0], 1], marker='x', color='b', label='0', s=50)
+    plt.scatter(location[selected_labels_indices[1], 0], location[selected_labels_indices[1], 1], marker='x', color='g', label='1', s=50)
+    plt.scatter(location[selected_labels_indices[2], 0], location[selected_labels_indices[2], 1], marker='x', color='k', label='2', s=50)
+    plt.scatter(location[selected_labels_indices[3], 0], location[selected_labels_indices[3], 1], marker='x', color='m', label='3', s=50)
+
+    # plot the edges
+    for i in np.arange(len(data)):
+        plt.plot([location[data[i, 0]-1, 0], location[data[i, 1]-1, 0]], [location[data[i, 0]-1, 1], location[data[i, 1]-1, 1]],
+                 color='r', linewidth=0.25)
+    plt.show()
+
+
+x = np.eye(nodes_num)  # the feature description of each node
+y = np.eye(class_num)  # the one-hot coding labels of the 4 samples
+data = data_processing(nodes_num)
+adjMatrix_norm = data.get_adjMatrix()  # normalized adjacent matrix
+graph = build_graph(adjMatrix_norm)  # the build graph
+
+print('Begin train')
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    for epoch in np.arange(epochs):
+        print(epoch)
+        sess.run(graph['train_op'], feed_dict={graph['x']: x, graph['y']: y})  # train the model
+        location = graph['o3'].eval(feed_dict={graph['x']: x, graph['y']: y})  # evaluate the locations
+        labels = graph['pred_labels'].eval(feed_dict={graph['x']: x, graph['y']: y})  # evaluate the predicted labels
+
+
+plot_figure(location, labels)
